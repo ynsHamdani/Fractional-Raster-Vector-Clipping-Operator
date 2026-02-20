@@ -5,7 +5,7 @@ A database-native implementation of a **Fractional Raster–Vector Clipping Oper
 This repository accompanies the paper:
 
 > *A Fractional Raster–Vector Clipping Operator for Boundary-Consistent Multi-Scale Spatial Analysis*  
-> Y. Hamdani, U.A. Treier, S. Normand
+
 
 ---
 
