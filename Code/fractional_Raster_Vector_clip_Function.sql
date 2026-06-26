@@ -1,142 +1,6 @@
 
-CREATE OR REPLACE FUNCTION raster_fractional_clip_modela(
-    rast        raster,
-    geom        geometry,
-    threshold   double precision DEFAULT 0.0,
-    at_least    boolean DEFAULT TRUE
-)
-RETURNS raster
-LANGUAGE plpgsql
-IMMUTABLE
-PARALLEL SAFE
-AS
-$$
-DECLARE
-    geom_proj   geometry;
-    geom_env    geometry;
+------ Check if the function ST_Clip with touched argument exist in the installation of postgis
 
-    rast_env    raster;
-    rast_out    raster;
-
-    px_w        double precision;
-    px_h        double precision;
-    px_area     double precision;
-    r_minkowski double precision;
-
-    geom_inner  geometry;
-    geom_bound  geometry;
-
-    p           record;
-BEGIN
-    ------------------------------------------------------------------
-    -- 0. Validation
-    ------------------------------------------------------------------
-    IF threshold < 0 OR threshold > 1 THEN
-        RAISE EXCEPTION 'threshold must be in [0,1], got %', threshold;
-    END IF;
-
-    ------------------------------------------------------------------
-    -- 1. Geometry alignment
-    ------------------------------------------------------------------
-    geom_proj := ST_MakeValid(ST_Transform(geom, ST_SRID(rast)));
-    geom_env  := ST_Envelope(geom_proj);
-
-    ------------------------------------------------------------------
-    -- 2. Pixel metrics
-    ------------------------------------------------------------------
-    px_w := abs(ST_PixelWidth(rast));
-    px_h := abs(ST_PixelHeight(rast));
-    px_area := px_w * px_h;
-    r_minkowski := 0.5 * sqrt(px_w * px_w + px_h * px_h);
-
-    ------------------------------------------------------------------
-    -- 3. Envelope clip
-    ------------------------------------------------------------------
-    rast_env := ST_Clip(rast, geom_env, NULL::double precision, TRUE);
-    IF rast_env IS NULL THEN
-        RETURN NULL;
-    END IF;
-
-    ------------------------------------------------------------------
-    -- 4. Strict polygon clip
-    ------------------------------------------------------------------
-    rast_out := ST_Clip(
-        rast_env,
-        geom_proj,
-        NULL::double precision,
-        TRUE
-    );
-
-    IF rast_out IS NULL THEN
-        RETURN NULL;
-    END IF;
-
-    ------------------------------------------------------------------
-    -- 5. Add weight band (Band 2)
-    ------------------------------------------------------------------
-    rast_out := ST_AddBand(
-        rast_out,
-        '32BF',
-        1.0,
-        0.0
-    );
-
-    ------------------------------------------------------------------
-    -- 6. Interior / boundary split
-    ------------------------------------------------------------------
-    geom_inner := ST_Buffer(geom_proj, -r_minkowski);
-
-    geom_bound := ST_Difference(
-        geom_proj,
-        COALESCE(
-            geom_inner,
-            ST_GeomFromText('POLYGON EMPTY', ST_SRID(geom_proj))
-        )
-    );
-
-    IF geom_bound IS NULL OR ST_IsEmpty(geom_bound) THEN
-        RETURN rast_out;
-    END IF;
-
-    ------------------------------------------------------------------
-    -- 7. Boundary pixels (enumerate from rast_out!)
-    ------------------------------------------------------------------
-    FOR p IN
-        SELECT
-            px.x,
-            px.y,
-            ST_Area(ST_Intersection(px.geom, geom_proj)) / px_area AS frac
-        FROM ST_PixelAsPolygons(rast_out, 1) AS px
-        WHERE
-            px.val IS NOT NULL
-            AND ST_Intersects(px.geom, geom_bound)
-    LOOP
-        IF p.frac > 0.0 AND p.frac < 1.0 THEN
-
-            IF (
-                ( at_least  AND p.frac >= threshold ) OR
-                ( NOT at_least AND p.frac <= threshold )
-            ) THEN
-                -- included fractional pixel
-                rast_out := ST_SetValue(rast_out, 2, p.x, p.y, p.frac);
-            ELSE
-                -- excluded pixel
-                rast_out := ST_SetValue(rast_out, 1, p.x, p.y, NULL);
-                rast_out := ST_SetValue(rast_out, 2, p.x, p.y, NULL);
-            END IF;
-
-        END IF;
-    END LOOP;
-
-    RETURN rast_out;
-END;
-$$;
-
-
-
-
-
------ Correct Function --------
 
 CREATE OR REPLACE FUNCTION raster_fractional_boundary_clip(
     rast        raster,
@@ -202,14 +66,16 @@ BEGIN
     END IF;
 
     ------------------------------------------------------------
-    -- 4. Strict polygon clip (center rule baseline)
+    -- 4. polygon clip (Touched=TRUE)
     ------------------------------------------------------------
-    rast_out := ST_Clip(
-        rast_env,
-        geom_proj,
-        NULL::double precision,
-        TRUE
-    );
+
+	rast_out := ST_Clip(
+    rast_env,
+    geom_proj,
+    NULL::double precision[],
+	crop => TRUE,
+    touched => TRUE
+);
 
     IF rast_out IS NULL THEN
         RETURN NULL;
@@ -300,8 +166,6 @@ BEGIN
 
 END;
 $$;
-
-
 
 
 
